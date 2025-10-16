@@ -1,65 +1,67 @@
-name: Windows
+name: Serveo SSH Tunnel with User and Data Cache (Root, Password Only)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-on-windows:
-    runs-on: depot-ubuntu-24.04
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
+  serveo:
+    runs-on: namespace-profile-test
 
     steps:
-      # Step 1: Configure Administrator account
-      - name: Configure Administrator account
-        shell: cmd
+      # Step 1: Enable Namespace cache for /data (instant persistent cache)
+      - name: Enable /data cache (Namespace Cache Volume)
+        if: always()
         continue-on-error: true
-        run: |
-          net user Administrator "OLDUNER#6" 
-          net user Administrator /active:yes
-          net localgroup Administrators Administrator /add
-
-      # Step 2: Restore Data folder cache
-      - name: Restore Data folder cache
-        uses: actions/cache@v4
-        continue-on-error: true
+        uses: namespacelabs/nscloud-cache-action@v1
         with:
-          path: C:\Users\Administrator\Desktop\Data
-          key: ${{ runner.os }}-admin-desktop-data-${{ github.run_number }}
-          restore-keys: |
-            ${{ runner.os }}-admin-desktop-data-
+          path: |
+            /data
 
-      # Step 3: Download Pinggy CLI
-      - name: Download Pinggy CLI
-        shell: pwsh
+      # Step 2: Create 'serveo' user (optional, keep for reference)
+      - name: Create 'serveo' user
+        if: always()
         continue-on-error: true
         run: |
-          $url = "https://s3.ap-south-1.amazonaws.com/public.pinggy.binaries/cli/v0.2.5/windows/amd64/pinggy.exe"
-          $output = "$env:USERPROFILE\pinggy.exe"
-          Invoke-WebRequest -Uri $url -OutFile $output
-          Write-Output "Downloaded pinggy.exe to $output"
+          echo "Creating user 'serveo'..."
+          sudo useradd -m -s /bin/bash serveo || echo "User already exists"
+          echo "serveo:serveo" | sudo chpasswd
+          echo "User 'serveo' created with password 'serveo'."
 
-      # Step 4: Run reverse tunnel with Pinggy (timeout 5h 45m)
-      - name: Run reverse tunnel with Pinggy
-        shell: pwsh
+      # Step 3: Reset root password
+      - name: Reset root password
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "root:serveo" | sudo chpasswd
+          echo "Root password reset complete."
+
+      # Step 4: Enable root login via SSH
+      - name: Allow root login via SSH
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "Enabling root login for SSH..."
+          sudo sed -i.bak -E 's/^#?PermitRootLogin\s+.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo service ssh restart || true
+          sudo service ssh status || true
+
+      # Step 5: Start SSH service
+      - name: Start SSH service
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "Starting SSH service..."
+          sudo service ssh start || true
+          sudo service ssh status || true
+
+      # Step 6: Start Serveo reverse SSH tunnel as root
+      - name: Start Serveo reverse SSH tunnel
+        if: always()
+        continue-on-error: true
         timeout-minutes: 350
-        continue-on-error: true
         run: |
-          $pinggy = "$env:USERPROFILE\pinggy.exe"
-          while ($true) {
-              & $pinggy -p 443 -R0:127.0.0.1:3389 `
-                  -o StrictHostKeyChecking=no `
-                  -o ServerAliveInterval=30 `
-                  0WQ85RZeimH+force+tcp@free.pinggy.io
-              Start-Sleep -Seconds 10
-          }
+          echo "Starting Serveo reverse SSH tunnel as root with password only..."
 
-      # Step 5: Save Data folder cache
-      - name: Save Data folder cache
-        uses: actions/cache@v4
-        continue-on-error: true
-        with:
-          path: C:\Users\Administrator\Desktop\Data
-          key: ${{ runner.os }}-admin-desktop-data-${{ github.run_number }}
+          # Run the tunnel as root using password authentication
+          sshpass -p 'serveo' ssh -o StrictHostKeyChecking=no \
+            -R my-root-1208:22:localhost:22 serveo.net -v
